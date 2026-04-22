@@ -31,7 +31,9 @@ You’ll need to bring your own library, e.g.:
 
 ## Getting started
 
-First `zig init` to create a Zig project. Then you will need to add mach-glfw to your `build.zig.zon`, and update your `build.zig` and `src/main.zig` files:
+You need [original GLFW repository](https://github.com/glfw/glfw) checkouted side by side GLFW-Zig in `glfw` directory to be able build this project.
+
+First `zig init` to create a Zig project. Then you will need to add mach-glfw to your `build.zig.zon`, and update your `build.zig` and `src/main.zig` files.
 
 ### `build.zig.zon`
 

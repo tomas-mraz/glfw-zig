@@ -28,7 +28,7 @@ fn zigFromRaw(memory: [*]u8) []align(alignment)u8 {
 fn alloc(
     size: usize,
     user: ?*anyopaque,
-) callconv(.C) ?*anyopaque {
+) callconv(.c) ?*anyopaque {
     if (user == null)
         unreachable;
     const allocator = @as(*const std.mem.Allocator, @ptrCast(@alignCast(user.?))).*;
@@ -39,7 +39,12 @@ fn doAlloc(
     allocator: std.mem.Allocator,
     size: usize,
 ) ?[*]u8 {
-    const buf = allocator.allocAdvancedWithRetAddr(u8, alignment, size + prefix_size, @returnAddress()) catch return null;
+    const buf = allocator.allocAdvancedWithRetAddr(
+        u8,
+        comptime std.mem.Alignment.fromByteUnits(alignment),
+        size + prefix_size,
+        @returnAddress(),
+    ) catch return null;
     return rawFromZig(buf, size);
 }
 
@@ -47,7 +52,7 @@ fn realloc(
     p_block: ?*anyopaque,
     size: usize,
     user: ?*anyopaque,
-) callconv(.C) ?*anyopaque {
+) callconv(.c) ?*anyopaque {
     if (user == null)
         unreachable;
     const allocator = @as(*const std.mem.Allocator, @ptrCast(@alignCast(user.?))).*;
@@ -78,7 +83,7 @@ fn doRealloc(
 fn free(
     p_block: ?*anyopaque,
     user: ?*anyopaque,
-) callconv(.C) void {
+) callconv(.c) void {
     if (user == null)
         unreachable;
     const allocator = @as(*const std.mem.Allocator, @ptrCast(@alignCast(user.?))).*;
