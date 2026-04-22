@@ -427,7 +427,18 @@ fn addAppleSdkIncludesIfAvailable(
 
 fn addVulkanIncludeIfAvailable(b: *std.Build, t: *std.Build.Step.TranslateC) void {
     const sdk = b.graph.environ_map.get("VULKAN_SDK") orelse return;
-    t.addIncludePath(.{ .cwd_relative = b.fmt("{s}/x86_64/include", .{sdk}) });
+    const io = b.graph.io;
+    const candidates = [_][]const u8{
+        b.fmt("{s}/Include", .{sdk}),
+        b.fmt("{s}/include", .{sdk}),
+        b.fmt("{s}/x86_64/include", .{sdk}),
+        b.fmt("{s}/macOS/include", .{sdk}),
+    };
+    for (candidates) |candidate| {
+        std.Io.Dir.accessAbsolute(io, candidate, .{}) catch continue;
+        t.addSystemIncludePath(.{ .cwd_relative = candidate });
+        return;
+    }
 }
 
 // Linux cross-compile (e.g. building aarch64-linux-gnu on x86_64 host): with
