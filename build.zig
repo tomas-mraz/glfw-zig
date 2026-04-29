@@ -13,7 +13,9 @@ pub fn build(b: *std.Build) !void {
     const use_metal = b.option(bool, "metal", "Build with Metal; only supported on macOS") orelse true;
     const shared = b.option(bool, "shared", "Build as a shared library") orelse false;
 
-    const glfw_lib = buildGlfwLibrary(b, target, optimize, .{
+    const glfw_c = b.dependency("glfw_c", .{});
+
+    const glfw_lib = buildGlfwLibrary(b, target, optimize, glfw_c, .{
         .shared = shared,
         .use_x11 = use_x11,
         .use_wayland = use_wayland,
@@ -22,8 +24,8 @@ pub fn build(b: *std.Build) !void {
         .use_metal = use_metal,
     });
 
-    const glfw_c_bindings = createGlfwBindings(b, target, optimize);
-    const glfw_native_bindings = createGlfwNativeBindings(b, target, optimize, .{
+    const glfw_c_bindings = createGlfwBindings(b, target, optimize, glfw_c);
+    const glfw_native_bindings = createGlfwNativeBindings(b, target, optimize, glfw_c, .{
         .use_x11 = use_x11,
         .use_wayland = use_wayland,
     });
@@ -68,11 +70,11 @@ fn buildGlfwLibrary(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    glfw_c: *std.Build.Dependency,
     options: BuildOptions,
 ) *std.Build.Step.Compile {
-    const glfw_root = b.path("../glfw");
-    const glfw_include = b.path("../glfw/include");
-    const generated_wayland = b.path("generated/wayland");
+    const glfw_root = glfw_c.path("");
+    const glfw_include = glfw_c.path("include");
 
     const lib = b.addLibrary(.{
         .name = "glfw",
@@ -84,13 +86,12 @@ fn buildGlfwLibrary(
         }),
     });
     lib.root_module.addIncludePath(glfw_include);
-    lib.root_module.addIncludePath(generated_wayland);
 
     if (options.shared) {
         lib.root_module.addCMacro("_GLFW_BUILD_DLL", "1");
     }
 
-    lib.installHeadersDirectory(b.path("../glfw/include/GLFW"), "GLFW", .{});
+    lib.installHeadersDirectory(glfw_c.path("include/GLFW"), "GLFW", .{});
 
     if (target.result.os.tag.isDarwin()) {
         lib.root_module.addCMacro("__kernel_ptr_semantics", "");
@@ -178,6 +179,9 @@ fn buildGlfwLibrary(
                 appendSlice(&sources, b.allocator, &linux_wayland_sources);
                 flags.append(b.allocator, "-D_GLFW_WAYLAND") catch @panic("OOM");
                 flags.append(b.allocator, "-Wno-implicit-function-declaration") catch @panic("OOM");
+
+                const generated_wayland = generateWaylandHeaders(b, glfw_c);
+                lib.root_module.addIncludePath(generated_wayland);
             }
 
             flags.append(b.allocator, include_src_flag) catch @panic("OOM");
@@ -198,13 +202,14 @@ fn createGlfwBindings(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    glfw_c: *std.Build.Dependency,
 ) *std.Build.Module {
     const translated = b.addTranslateC(.{
-        .root_source_file = b.path("../glfw/include/GLFW/glfw3.h"),
+        .root_source_file = glfw_c.path("include/GLFW/glfw3.h"),
         .target = target,
         .optimize = optimize,
     });
-    translated.addIncludePath(b.path("../glfw/include"));
+    translated.addIncludePath(glfw_c.path("include"));
     translated.defineCMacro("GLFW_INCLUDE_VULKAN", "1");
     translated.defineCMacro("GLFW_INCLUDE_NONE", "1");
     if (target.result.os.tag.isDarwin()) {
@@ -217,6 +222,7 @@ fn createGlfwNativeBindings(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    glfw_c: *std.Build.Dependency,
     options: struct {
         use_x11: bool,
         use_wayland: bool,
@@ -232,7 +238,7 @@ fn createGlfwNativeBindings(
         .target = target,
         .optimize = optimize,
     });
-    translated.addIncludePath(b.path("../glfw/include"));
+    translated.addIncludePath(glfw_c.path("include"));
     translated.defineCMacro("GLFW_INCLUDE_VULKAN", "1");
     translated.defineCMacro("GLFW_INCLUDE_NONE", "1");
 
@@ -263,6 +269,44 @@ fn createGlfwNativeBindings(
 
 fn appendSlice(list: *std.ArrayList([]const u8), allocator: std.mem.Allocator, items: []const []const u8) void {
     list.appendSlice(allocator, items) catch @panic("OOM");
+}
+
+const WaylandProtocol = struct {
+    xml: []const u8,
+    base: []const u8,
+};
+
+const wayland_protocols = [_]WaylandProtocol{
+    .{ .xml = "deps/wayland/wayland.xml", .base = "wayland-client-protocol" },
+    .{ .xml = "deps/wayland/xdg-shell.xml", .base = "xdg-shell-client-protocol" },
+    .{ .xml = "deps/wayland/xdg-decoration-unstable-v1.xml", .base = "xdg-decoration-unstable-v1-client-protocol" },
+    .{ .xml = "deps/wayland/viewporter.xml", .base = "viewporter-client-protocol" },
+    .{ .xml = "deps/wayland/relative-pointer-unstable-v1.xml", .base = "relative-pointer-unstable-v1-client-protocol" },
+    .{ .xml = "deps/wayland/pointer-constraints-unstable-v1.xml", .base = "pointer-constraints-unstable-v1-client-protocol" },
+    .{ .xml = "deps/wayland/idle-inhibit-unstable-v1.xml", .base = "idle-inhibit-unstable-v1-client-protocol" },
+    .{ .xml = "deps/wayland/xdg-activation-v1.xml", .base = "xdg-activation-v1-client-protocol" },
+    .{ .xml = "deps/wayland/fractional-scale-v1.xml", .base = "fractional-scale-v1-client-protocol" },
+};
+
+fn generateWaylandHeaders(b: *std.Build, glfw_c: *std.Build.Dependency) std.Build.LazyPath {
+    const wf = b.addWriteFiles();
+
+    for (wayland_protocols) |p| {
+        const header_name = b.fmt("{s}.h", .{p.base});
+        const code_name = b.fmt("{s}-code.h", .{p.base});
+
+        const header_run = b.addSystemCommand(&.{ "wayland-scanner", "client-header" });
+        header_run.addFileArg(glfw_c.path(p.xml));
+        const header_out = header_run.addOutputFileArg(header_name);
+        _ = wf.addCopyFile(header_out, header_name);
+
+        const code_run = b.addSystemCommand(&.{ "wayland-scanner", "private-code" });
+        code_run.addFileArg(glfw_c.path(p.xml));
+        const code_out = code_run.addOutputFileArg(code_name);
+        _ = wf.addCopyFile(code_out, code_name);
+    }
+
+    return wf.getDirectory();
 }
 
 const base_sources = [_][]const u8{

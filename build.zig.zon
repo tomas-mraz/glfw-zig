@@ -4,10 +4,16 @@
     .fingerprint = 0x3bbe0a5cf7d7fc60,
     .minimum_zig_version = "0.17.0-dev.56+a8226cd53",
 
-    .dependencies = .{},
+    .dependencies = .{
+        .glfw_c = .{
+            .url = "git+https://github.com/glfw/glfw.git#b00e6a8a88ad1b60c0a045e696301deb92c9a13e",
+            .hash = "N-V-__8AAHY6SgDsOtlne_7Iu4wUNbdgK1SEt8aPWX8cz4MX",
+        },
+    },
 
     .paths = .{
         "src/",
+        "generated/",
         "build.zig",
         "build.zig.zon",
         "LICENSE",

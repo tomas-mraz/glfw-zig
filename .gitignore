@@ -11,11 +11,12 @@
 
 .zig-cache/
 zig-out/
+zig-pkg/
 /release/
 /debug/
 /build/
 /build-*/
 /docgen_tmp/
-generated
+/generated/
 
 .direnv/
