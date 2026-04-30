@@ -152,6 +152,7 @@ fn buildGlfwLibrary(
 
             if (options.use_metal) {
                 lib.root_module.linkFramework("Metal", .{});
+                lib.root_module.linkFramework("QuartzCore", .{});
             }
             if (options.use_opengl) {
                 lib.root_module.linkFramework("OpenGL", .{});
@@ -227,9 +228,7 @@ fn createGlfwBindings(
     translated.defineCMacro("GLFW_INCLUDE_NONE", "1");
     if (target.result.os.tag.isDarwin()) {
         translated.defineCMacro("__kernel_ptr_semantics", "");
-        addMacosSdkRootToTranslateC(b, translated, target);
     }
-    addVulkanSdkInclude(b, translated);
     return translated.createModule();
 }
 
@@ -258,7 +257,6 @@ fn createGlfwNativeBindings(
     addAppleSdkIncludesIfAvailable(b, translated, target);
     translated.defineCMacro("GLFW_INCLUDE_VULKAN", "1");
     translated.defineCMacro("GLFW_INCLUDE_NONE", "1");
-    addVulkanSdkInclude(b, translated);
 
     // Apple's Cocoa/AppKit headers contain Objective-C constructs (blocks,
     // nullability annotations on uuid_t) that translate-c cannot parse. When
@@ -278,7 +276,6 @@ fn createGlfwNativeBindings(
                 translated.defineCMacro("GLFW_EXPOSE_NATIVE_NSGL", "1");
             }
             translated.defineCMacro("__kernel_ptr_semantics", "");
-            addMacosSdkRootToTranslateC(b, translated, target);
         },
         else => {
             if (options.use_x11) {
@@ -390,7 +387,7 @@ const windows_sources = [_][]const u8{
 };
 
 const macos_sources = [_][]const u8{
-    "src/cocoa_time.c",
+    "src/macos_time.c",
     "src/posix_module.c",
     "src/posix_thread.c",
     "src/cocoa_init.m",
