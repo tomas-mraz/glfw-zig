@@ -97,6 +97,7 @@ fn buildGlfwLibrary(
         lib.root_module.addCMacro("__kernel_ptr_semantics", "");
         addMacosSdkRootToModule(b, lib.root_module, target);
     }
+    addLinuxCrossSystemIncludesToModule(b, lib.root_module, target);
 
     const include_src_flag = "-Isrc";
 
@@ -224,6 +225,7 @@ fn createGlfwBindings(
     translated.addIncludePath(glfw_c.path("include"));
     addVulkanIncludeIfAvailable(b, translated);
     addAppleSdkIncludesIfAvailable(b, translated, target);
+    addLinuxCrossSystemIncludesToTranslateC(b, translated, target);
     translated.defineCMacro("GLFW_INCLUDE_VULKAN", "1");
     translated.defineCMacro("GLFW_INCLUDE_NONE", "1");
     if (target.result.os.tag.isDarwin()) {
@@ -255,6 +257,7 @@ fn createGlfwNativeBindings(
     translated.addIncludePath(glfw_c.path("include"));
     addVulkanIncludeIfAvailable(b, translated);
     addAppleSdkIncludesIfAvailable(b, translated, target);
+    addLinuxCrossSystemIncludesToTranslateC(b, translated, target);
     translated.defineCMacro("GLFW_INCLUDE_VULKAN", "1");
     translated.defineCMacro("GLFW_INCLUDE_NONE", "1");
 
@@ -425,4 +428,36 @@ fn addAppleSdkIncludesIfAvailable(
 fn addVulkanIncludeIfAvailable(b: *std.Build, t: *std.Build.Step.TranslateC) void {
     const sdk = b.graph.environ_map.get("VULKAN_SDK") orelse return;
     t.addIncludePath(.{ .cwd_relative = b.fmt("{s}/x86_64/include", .{sdk}) });
+}
+
+// Linux cross-compile (e.g. building aarch64-linux-gnu on x86_64 host): with
+// an explicit -Dtarget Zig stops auto-discovering /usr/include, so the GLFW
+// build can't find Wayland/Vulkan/EGL headers. Multi-arch *-dev:<arch> Debian
+// packages keep arch-neutral headers in /usr/include, so adding it back is
+// enough. Native Linux builds (no -Dtarget) are unaffected since we only fire
+// when the target arch differs from the host.
+fn isLinuxCrossBuild(b: *std.Build, target: std.Build.ResolvedTarget) bool {
+    const t = target.result;
+    if (t.os.tag != .linux) return false;
+    const host = b.graph.host.result;
+    if (host.os.tag != .linux) return true;
+    return t.cpu.arch != host.cpu.arch;
+}
+
+fn addLinuxCrossSystemIncludesToModule(
+    b: *std.Build,
+    m: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+) void {
+    if (!isLinuxCrossBuild(b, target)) return;
+    m.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+}
+
+fn addLinuxCrossSystemIncludesToTranslateC(
+    b: *std.Build,
+    t: *std.Build.Step.TranslateC,
+    target: std.Build.ResolvedTarget,
+) void {
+    if (!isLinuxCrossBuild(b, target)) return;
+    t.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
 }
