@@ -125,6 +125,16 @@ fn buildGlfwLibrary(
             });
         },
         .macos => {
+            // Cross-compile from a non-Darwin host: xcrun isn't available so
+            // point the linker at a staged Apple SDK via $SDKROOT. Native
+            // macOS builds rely on Zig's xcrun auto-detection and skip this.
+            if (!b.graph.host.result.os.tag.isDarwin()) {
+                if (b.graph.environ_map.get("SDKROOT")) |sdk_root| {
+                    lib.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib", .{sdk_root}) });
+                    lib.root_module.addFrameworkPath(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sdk_root}) });
+                    lib.root_module.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{sdk_root}) });
+                }
+            }
             lib.root_module.linkFramework("CFNetwork", .{});
             lib.root_module.linkFramework("ApplicationServices", .{});
             lib.root_module.linkFramework("ColorSync", .{});
@@ -210,6 +220,8 @@ fn createGlfwBindings(
         .optimize = optimize,
     });
     translated.addIncludePath(glfw_c.path("include"));
+    addVulkanIncludeIfAvailable(b, translated);
+    addAppleSdkIncludesIfAvailable(b, translated, target);
     translated.defineCMacro("GLFW_INCLUDE_VULKAN", "1");
     translated.defineCMacro("GLFW_INCLUDE_NONE", "1");
     if (target.result.os.tag.isDarwin()) {
@@ -239,17 +251,28 @@ fn createGlfwNativeBindings(
         .optimize = optimize,
     });
     translated.addIncludePath(glfw_c.path("include"));
+    addVulkanIncludeIfAvailable(b, translated);
+    addAppleSdkIncludesIfAvailable(b, translated, target);
     translated.defineCMacro("GLFW_INCLUDE_VULKAN", "1");
     translated.defineCMacro("GLFW_INCLUDE_NONE", "1");
 
+    // Apple's Cocoa/AppKit headers contain Objective-C constructs (blocks,
+    // nullability annotations on uuid_t) that translate-c cannot parse. When
+    // cross-compiling to macOS from a non-Darwin host we skip the COCOA/NSGL
+    // macros so glfw3native.h's Apple branch isn't pulled in. Native macOS
+    // builds (host is Darwin) keep them so getCocoaWindow / getNSGLContext
+    // remain available.
+    const host_is_darwin = b.graph.host.result.os.tag.isDarwin();
     switch (target.result.os.tag) {
         .windows => {
             translated.defineCMacro("GLFW_EXPOSE_NATIVE_WIN32", "1");
             translated.defineCMacro("GLFW_EXPOSE_NATIVE_WGL", "1");
         },
         .macos => {
-            translated.defineCMacro("GLFW_EXPOSE_NATIVE_COCOA", "1");
-            translated.defineCMacro("GLFW_EXPOSE_NATIVE_NSGL", "1");
+            if (host_is_darwin) {
+                translated.defineCMacro("GLFW_EXPOSE_NATIVE_COCOA", "1");
+                translated.defineCMacro("GLFW_EXPOSE_NATIVE_NSGL", "1");
+            }
             translated.defineCMacro("__kernel_ptr_semantics", "");
         },
         else => {
@@ -371,3 +394,71 @@ const macos_sources = [_][]const u8{
     "src/cocoa_window.m",
     "src/nsgl_context.m",
 };
+
+/// Add the Vulkan SDK include directory to a translate-c step so glfw3.h's
+/// `#include <vulkan/vulkan.h>` resolves on every host. Looks for VULKAN_SDK
+/// in env or as a build option, then walks the common SDK layouts:
+///   $VULKAN_SDK/include/vulkan/vulkan.h         (Linux distro / `/usr`)
+///   $VULKAN_SDK/x86_64/include/vulkan/vulkan.h  (LunarG SDK on Linux)
+///   $VULKAN_SDK/Include/vulkan/vulkan.h         (LunarG SDK on Windows)
+///   $VULKAN_SDK/macOS/include/vulkan/vulkan.h   (LunarG SDK on macOS)
+///   $VULKAN_SDK/<version>/{x86_64,...}/include  (versioned LunarG installs)
+fn addVulkanIncludeIfAvailable(b: *std.Build, translated: *std.Build.Step.TranslateC) void {
+    const sdk_root = b.graph.environ_map.get("VULKAN_SDK") orelse return;
+    if (findVulkanIncludeDir(b, sdk_root)) |include_dir| {
+        translated.addIncludePath(.{ .cwd_relative = include_dir });
+    }
+}
+
+fn findVulkanIncludeDir(b: *std.Build, root: []const u8) ?[]const u8 {
+    const layouts = [_][]const u8{
+        "include",
+        "x86_64/include",
+        "Include",
+        "macOS/include",
+    };
+    for (layouts) |sub| {
+        const candidate = b.fmt("{s}/{s}", .{ root, sub });
+        if (vulkanHeaderExists(b, candidate)) return candidate;
+    }
+    return null;
+}
+
+fn vulkanHeaderExists(b: *std.Build, include_dir: []const u8) bool {
+    const probe = b.fmt("{s}/vulkan/vulkan.h", .{include_dir});
+    std.Io.Dir.accessAbsolute(b.graph.io, probe, .{}) catch return false;
+    return true;
+}
+
+/// Cross-compile to macOS from Linux needs the Apple SDK headers/frameworks
+/// staged on disk; xcrun-driven native builds on macOS pick them up
+/// automatically. We honour SDKROOT (set by xcrun on Mac, set manually on
+/// Linux when staging an SDK) so the same build works everywhere.
+fn addAppleSdkIncludesIfAvailable(
+    b: *std.Build,
+    translated: *std.Build.Step.TranslateC,
+    target: std.Build.ResolvedTarget,
+) void {
+    if (!target.result.os.tag.isDarwin()) return;
+    const sdk_root = b.graph.environ_map.get("SDKROOT") orelse return;
+    translated.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{sdk_root}) });
+
+    const frameworks_root = b.fmt("{s}/System/Library/Frameworks", .{sdk_root});
+    translated.addFrameworkPath(.{ .cwd_relative = frameworks_root });
+
+    // Some Apple frameworks bundle nested ("sub") frameworks (e.g. AE, ATS).
+    // clang on a real Mac walks parent framework Frameworks/ subdirs while
+    // parsing the parent header; translate-c's invocation does not, so we add
+    // each parent's Frameworks/ explicitly. Failures are silently ignored —
+    // a missing parent on a stripped-down SDK is fine.
+    const sub_framework_parents = [_][]const u8{
+        "CoreServices.framework",
+        "ApplicationServices.framework",
+        "Carbon.framework",
+    };
+    for (sub_framework_parents) |parent| {
+        const candidate = b.fmt("{s}/{s}/Frameworks", .{ frameworks_root, parent });
+        std.Io.Dir.accessAbsolute(b.graph.io, candidate, .{}) catch continue;
+        translated.addFrameworkPath(.{ .cwd_relative = candidate });
+    }
+}
