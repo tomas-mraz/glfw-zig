@@ -272,6 +272,13 @@ fn createGlfwNativeBindings(
         .windows => {
             translated.defineCMacro("GLFW_EXPOSE_NATIVE_WIN32", "1");
             translated.defineCMacro("GLFW_EXPOSE_NATIVE_WGL", "1");
+            // MinGW <string.h> emits fortified inline wcscat/wcscpy when
+            // __MINGW_FORTIFY_LEVEL > 0 (i.e. _FORTIFY_SOURCE > 0). Their
+            // translate-c output contains unused local extern wrappers that
+            // Zig's eager analysis in Release modes rejects with
+            // 'unused local constant'. Force _FORTIFY_SOURCE=0 so MinGW skips
+            // the fortified inlines entirely.
+            translated.defineCMacro("_FORTIFY_SOURCE", "0");
         },
         .macos => {
             if (host_is_darwin) {
